@@ -34,7 +34,7 @@ jobs:
 
       - name: Patch SIMD Headers, Intrinsics, and Strip Tuning Code
         run: |
-          python3 -c '
+          python3 - << 'EOF'
           import os, shutil
 
           # 1. Completely remove the tuning directory so it cannot be compiled
@@ -56,7 +56,6 @@ jobs:
               # Remove any residual includes pointing to tuning headers
               lines = content.splitlines()
               new_lines = []
-              skip_block = False
               
               for line in lines:
                   if "tuning/" in line and "#include" in line:
@@ -92,7 +91,7 @@ jobs:
               for file in files:
                 if file.endswith((".h", ".hpp", ".cpp", ".c")):
                     patch_file(os.path.join(root, file))
-          '
+          EOF
 
       - name: Build Arcanum for Android ARM64 (API 28+)
         run: |
