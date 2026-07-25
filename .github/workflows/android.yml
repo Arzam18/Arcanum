@@ -32,10 +32,15 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers and Intrinsics
+      - name: Patch SIMD Headers, Intrinsics, and Purge Tuning Module
         run: |
           python3 -c '
-          import os
+          import os, shutil
+
+          # 1. Completely remove the tuning directory so it cannot be compiled
+          if os.path.exists("src/tuning"):
+              shutil.rmtree("src/tuning")
+              print("Purged src/tuning directory successfully.")
 
           def patch_file(path):
               with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -47,6 +52,10 @@ jobs:
               for header in ["<immintrin.h>", "<x86intrin.h>", "<emmintrin.h>", "<smmintrin.h>"]:
                   if header in content:
                       content = content.replace(header, "\"sse2neon.h\"")
+
+              # Remove any residual includes pointing to tuning headers
+              content = content.replace("#include \"tuning/nnuetrainer.hpp\"", "")
+              content = content.replace("#include \"tuning/fengen.hpp\"", "")
 
               # Specific patch for Arcanum src/intrinsics.hpp to map x86 bit ops to ARM/Clang builtins
               if "intrinsics.hpp" in path:
@@ -79,7 +88,7 @@ jobs:
           MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
           
           if [ -n "$MAKEFILE_PATH" ]; then
-            echo "Found Makefile, patching for cross-compilation and dropping tuning files..."
+            echo "Found Makefile, patching for cross-compilation..."
             MAKE_DIR=$(dirname "$MAKEFILE_PATH")
             
             # Clean x86 flags and -Werror from Makefile
@@ -92,9 +101,6 @@ jobs:
             sed -i 's/-march=native//g' "$MAKEFILE_PATH"
             sed -i 's/-Werror//g' "$MAKEFILE_PATH"
 
-            # Exclude the tuning source files from recursive wildcard collection
-            sed -i 's/SOURCES := $(call rwildcard, $(SOURCEDIR)\/, %.cpp)/SOURCES := $(filter-out %\/tuning\/%, $(call rwildcard, $(SOURCEDIR)\/, %.cpp))/g' "$MAKEFILE_PATH"
-
             # Inject static linking and sse2neon inclusion
             sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
@@ -102,7 +108,7 @@ jobs:
             make CXX="$NDK_CXX" CC="$NDK_CC"
           else
             echo "No Makefile found, compiling manually via file discovery..."
-            SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \) ! -path "*/tuning/*")
+            SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \))
             
             $NDK_CXX -O3 -flto -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h \
               -I. -Isrc \
