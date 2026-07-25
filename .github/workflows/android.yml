@@ -32,7 +32,7 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers, Intrinsics, and Purge Tuning Module
+      - name: Patch SIMD Headers, Intrinsics, and Strip Tuning Code
         run: |
           python3 -c '
           import os, shutil
@@ -53,15 +53,24 @@ jobs:
                   if header in content:
                       content = content.replace(header, "\"sse2neon.h\"")
 
-              # Remove any residual includes pointing to tuning headers (both quotes and angle brackets)
+              # Remove any residual includes pointing to tuning headers
               lines = content.splitlines()
               new_lines = []
+              skip_block = False
+              
               for line in lines:
                   if "tuning/" in line and "#include" in line:
                       continue
-                  if ("fengen" in line or "nnuetrainer" in line) and ("argsparser" in path):
-                      line = "// " + line
+                  
+                  # If we are in argsparser.cpp, filter out training command blocks cleanly
+                  if "argsparser.cpp" in path:
+                      if 'command == "train"' in line or 'command == "gen"' in line or 'command == "merge"' in line:
+                          line = "// " + line
+                      if "FengenParameters" in line or "TrainingParameters" in line or "NNUETrainer" in line or "DataMerger" in line or "Fengen::start" in line:
+                          line = "// " + line
+
                   new_lines.append(line)
+              
               content = "\n".join(new_lines)
 
               # Specific patch for Arcanum src/intrinsics.hpp to map x86 bit ops to ARM/Clang builtins
@@ -108,8 +117,8 @@ jobs:
             sed -i 's/-march=native//g' "$MAKEFILE_PATH"
             sed -i 's/-Werror//g' "$MAKEFILE_PATH"
 
-            # Inject static linking and sse2neon inclusion
-            sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
+            # Inject static linking, sse2neon inclusion, and a definition to bypass tuning
+            sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
             cd "$MAKE_DIR"
             make CXX="$NDK_CXX" CC="$NDK_CC"
@@ -117,7 +126,7 @@ jobs:
             echo "No Makefile found, compiling manually via file discovery..."
             SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \))
             
-            $NDK_CXX -O3 -flto -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h \
+            $NDK_CXX -O3 -flto -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING \
               -I. -Isrc \
               $SOURCES -lm -o Arcanum-android-arm64
           fi
