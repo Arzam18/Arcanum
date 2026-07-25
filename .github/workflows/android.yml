@@ -1,17 +1,25 @@
-name: Build Arcanum for Android with sse2neon
+name: Build Arcanum for Android
 
 on:
-  push:
-    branches: [ main, master ]
   workflow_dispatch:
+  push:
+    branches: [ "*" ]
+  pull_request:
+    branches: [ "*" ]
+
+permissions:
+  contents: write
 
 jobs:
-  build:
+  build-android:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout code
+      - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
 
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -20,54 +28,101 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Inject sxe2neon and Patch Makefile
+      - name: Download sse2neon Header
         run: |
-          # 1. Download sse2neon header to bridge Intel intrinsics to ARM NEON
-          curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o src/sse2neon.h
+          curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-          # 2. Find the Makefile
-          MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
-          MAKE_DIR=$(dirname "$MAKEFILE_PATH")
+      - name: Patch SIMD Headers and Compiler Incompatibilities
+        run: |
+          python3 -c '
+          import os
 
-          # 3. Clean x86 flags and -Werror
-          sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
-          sed -i 's/-mfma//g' "$MAKEFILE_PATH"
-          sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
-          sed -i 's/-mbmi//g' "$MAKEFILE_PATH"
-          sed -i 's/-mpopcnt//g' "$MAKEFILE_PATH"
-          sed -i 's/-mlzcnt//g' "$MAKEFILE_PATH"
-          sed -i 's/-march=native//g' "$MAKEFILE_PATH"
-          sed -i 's/-Werror//g' "$MAKEFILE_PATH"
+          def patch_file(path):
+              with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                  content = f.read()
 
-          # 4. Inject static linking, ARM Neon SIMD, and force inclusion of sse2neon where immintrin.h is used
-          sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
+              original = content
 
-          # 5. Set up Android NDK Clang compiler path for ARM64 (API 28)
+              # Replace Intel intrinsic headers with sse2neon
+              for header in ["<immintrin.h>", "<x86intrin.h>", "<emmintrin.h>", "<smmintrin.h>"]:
+                  if header in content:
+                      content = content.replace(header, "\"sse2neon.h\"")
+
+              # Fallback for std::aligned_alloc on Android NDK if present
+              if "std::aligned_alloc" in content:
+                  content = content.replace(
+                      "ptr = std::aligned_alloc",
+                      "posix_memalign(&ptr"
+                  )
+
+              if content != original:
+                  with open(path, "w", encoding="utf-8") as f:
+                      f.write(content)
+                  print(f"Patched: {path}")
+
+          for root, dirs, files in os.walk("."):
+              for file in files:
+                if file.endswith((".h", ".hpp", ".cpp", ".c")):
+                    patch_file(os.path.join(root, file))
+          '
+
+      - name: Build Arcanum for Android ARM64 (API 28+)
+        run: |
+          # Set up the Android NDK Clang compiler paths for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
-          export CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
-          export CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
+          NDK_CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
+          NDK_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
 
-          # 6. Build Arcanum
-          cd "$MAKE_DIR"
-          make CXX="$CXX" CC="$CC"
+          # Fallback: if a Makefile exists, let us check if we can cleanly patch or run manual source compilation
+          MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
+          
+          if [ -n "$MAKEFILE_PATH" ]; then
+            echo "Found Makefile, patching for cross-compilation..."
+            MAKE_DIR=$(dirname "$MAKEFILE_PATH")
+            
+            # Clean x86 flags and -Werror from Makefile
+            sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
+            sed -i 's/-mfma//g' "$MAKEFILE_PATH"
+            sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
+            sed -i 's/-mbmi//g' "$MAKEFILE_PATH"
+            sed -i 's/-mpopcnt//g' "$MAKEFILE_PATH"
+            sed -i 's/-mlzcnt//g' "$MAKEFILE_PATH"
+            sed -i 's/-march=native//g' "$MAKEFILE_PATH"
+            sed -i 's/-Werror//g' "$MAKEFILE_PATH"
 
-          # 7. Locate and bundle binary
-          mkdir -p "${{ github.workspace }}/artifact"
-          if [ -f "build/Arcanum" ]; then
-            cp build/Arcanum "${{ github.workspace }}/artifact/arcanum"
-          elif [ -f "Arcanum" ]; then
-            cp Arcanum "${{ github.workspace }}/artifact/arcanum"
+            # Inject static linking and sse2neon inclusion
+            sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
+
+            cd "$MAKE_DIR"
+            make CXX="$NDK_CXX" CC="$NDK_CC"
           else
-            find . -maxdepth 2 -type f -executable -not -name "*.sh" -not -name "*.h" -not -name "*.cpp" -not -name "*.o" -exec cp {} "${{ github.workspace }}/artifact/arcanum" \;
+            echo "No Makefile found, compiling manually via file discovery..."
+            SOURCES=$(find . -type f \( -name "*.cpp" -o -name "*.c" \) ! -path "*/build/*" ! -path "*/releases/*")
+            
+            $NDK_CXX -O3 -flto -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h \
+              -I. -Isrc \
+              $SOURCES -lm -o Arcanum-android-arm64
           fi
 
-      - name: Verify Binary Architecture
-        run: |
-          file "${{ github.workspace }}/artifact/arcanum"
-          ls -la "${{ github.workspace }}/artifact"
+          # Organize output binary
+          mkdir -p dist/bin
+          if [ -f "build/Arcanum" ]; then
+            cp build/Arcanum dist/bin/arcanum
+          elif [ -f "Arcanum" ]; then
+            cp Arcanum dist/bin/arcanum
+          elif [ -f "Arcanum-android-arm64" ]; then
+            cp Arcanum-android-arm64 dist/bin/arcanum
+          else
+            find . -maxdepth 3 -type f -executable -not -name "*.sh" -not -name "*.h" -not -name "*.cpp" -not -name "*.o" -exec cp {} dist/bin/arcanum \;
+          fi
 
-      - name: Upload Compiled Binary
+      - name: Verify Android Binary
+        run: |
+          ls -lh dist/bin/
+          file dist/bin/*
+
+      - name: Upload Android Artifact
         uses: actions/upload-artifact@v4
         with:
           name: arcanum-android-arm64
-          path: artifact/arcanum
+          path: dist/bin/*
