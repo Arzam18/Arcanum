@@ -1,0 +1,80 @@
+name: Build Arcanum for Android
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Android NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r27c
+          add-to-path: true
+
+      - name: Patch Makefile and Build Arcanum ARM64
+        run: |
+          # 1. Find the Makefile
+          MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
+
+          if [ -z "$MAKEFILE_PATH" ]; then
+            echo "Error: No Makefile found in repository!"
+            exit 1
+          fi
+
+          echo "Found Makefile at: $MAKEFILE_PATH"
+          MAKE_DIR=$(dirname "$MAKEFILE_PATH")
+
+          # 2. Patch Makefile: Strip x86 specific flags, AVX/BMI instructions, and -Werror
+          sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
+          sed -i 's/-mfma//g' "$MAKEFILE_PATH"
+          sed -i 's/-mbmi//g' "$MAKEFILE_PATH"
+          sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
+          sed -i 's/-mpopcnt//g' "$MAKEFILE_PATH"
+          sed -i 's/-mlzcnt//g' "$MAKEFILE_PATH"
+          sed -i 's/-march=native//g' "$MAKEFILE_PATH"
+          sed -i 's/-Werror//g' "$MAKEFILE_PATH"
+
+          # 3. Inject static C++ standard library linking & ARM neon vector flags into CFLAGS
+          sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
+
+          # 4. Set up the Android NDK Clang compiler path for ARM64 (API 28)
+          TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
+          export CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
+          export CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
+
+          # 5. Build Arcanum
+          cd "$MAKE_DIR"
+          make CXX="$CXX" CC="$CC"
+
+          # 6. Locate the compiled executable and copy it to a clean artifact folder
+          mkdir -p "${{ github.workspace }}/artifact"
+          
+          # Check for 'Arcanum' executable in build directory or root
+          if [ -f "build/Arcanum" ]; then
+            cp build/Arcanum "${{ github.workspace }}/artifact/arcanum"
+          elif [ -f "Arcanum" ]; then
+            cp Arcanum "${{ github.workspace }}/artifact/arcanum"
+          else
+            # Fallback search for any executable binary created
+            find . -maxdepth 2 -type f -executable -not -name "*.sh" -not -name "*.h" -not -name "*.cpp" -not -name "*.o" -exec cp {} "${{ github.workspace }}/artifact/arcanum" \;
+          fi
+
+      - name: Verify Binary Architecture
+        run: |
+          file "${{ github.workspace }}/artifact/arcanum"
+          ls -la "${{ github.workspace }}/artifact"
+
+      - name: Upload Compiled Binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: arcanum-android-arm64
+          path: artifact/arcanum
