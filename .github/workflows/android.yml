@@ -32,7 +32,7 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers, Intrinsics, and Compiler Incompatibilities
+      - name: Patch SIMD Headers, Intrinsics, Matrix, and Compiler Incompatibilities
         run: |
           python3 -c '
           import os
@@ -58,6 +58,16 @@ jobs:
                   content = content.replace("return _pext_u64(v, mask);", "return 0; /* pext emulation fallback */")
                   content = content.replace("return _lrotl(v, shift);", "return (v << (shift & 63)) | (v >> (64 - (shift & 63)));")
 
+              # Patch matrix.hpp AVX2/256-bit references to safe scalar fallbacks
+              if "matrix.hpp" in path:
+                  content = content.replace("__m256", "float")
+                  content = content.replace("__m256i", "int")
+                  content = content.replace("_mm256_load_ps", "(void)")
+                  content = content.replace("_mm256_store_ps", "(void)")
+                  content = content.replace("_mm256_add_ps", "")
+                  content = content.replace("_mm256_setzero_ps", "0")
+                  content = content.replace("_mm_prefetch", "(void)")
+
               # Fallback for std::aligned_alloc on Android NDK if present
               if "std::aligned_alloc" in content:
                   content = content.replace(
@@ -81,7 +91,7 @@ jobs:
           # Set up the Android NDK Clang compiler paths for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           NDK_CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
-          NVD_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
+          NDK_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
 
           MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
           
@@ -103,7 +113,7 @@ jobs:
             sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
             cd "$MAKE_DIR"
-            make CXX="$NDK_CXX" CC="$NVD_CC"
+            make CXX="$NDK_CXX" CC="$NDK_CC"
           else
             echo "No Makefile found, compiling manually via file discovery..."
             SOURCES=$(find . -type f \( -name "*.cpp" -o -name "*.c" \) ! -path "*/build/*" ! -path "*/releases/*")
