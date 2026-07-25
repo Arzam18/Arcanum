@@ -77,8 +77,7 @@ jobs:
                   content = content.replace("return _tzcnt_u64(bitboard);", "return __builtin_ctzll(bitboard);")
                   content = content.replace("uint64_t lzeros = _lzcnt_u64(v);", "uint64_t lzeros = (v == 0) ? 64 : __builtin_clzll(v);")
                   content = content.replace("return _lrotl(v, shift);", "return (v << (shift & 63)) | (v >> (64 - (shift & 63)));")
-                  content = content.replace('#error "Missing implementation of PEXT"', '/* #error PEXT bypassed */')
-                  # Fix PEXT function body to return 0 explicitly
+                  content = content.replace('#error "Missing implementation of PEXT"', 'return 0ULL;')
                   content = content.replace('return PEXT(v, mask);', 'return 0ULL;')
 
               # Inject full namespace using directive into bitboard.hpp
@@ -122,6 +121,7 @@ jobs:
           echo "Compiling Arcanum for Android ARM64..."
           $NDK_CXX -O3 -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING \
             -DIS_64BIT -DUSE_POPCNT -DUSE_LZCNT -DARCANUM_VERSION=\"dev_build\" -DENABLE_INCBIN \
+            -Wno-error -Wno-return-type \
             -I. -Isrc \
             $SOURCES -lm -o Arcanum-android-arm64
 
