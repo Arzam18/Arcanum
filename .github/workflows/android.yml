@@ -32,7 +32,7 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers and Compiler Incompatibilities
+      - name: Patch SIMD Headers, Intrinsics, and Compiler Incompatibilities
         run: |
           python3 -c '
           import os
@@ -47,6 +47,16 @@ jobs:
               for header in ["<immintrin.h>", "<x86intrin.h>", "<emmintrin.h>", "<smmintrin.h>"]:
                   if header in content:
                       content = content.replace(header, "\"sse2neon.h\"")
+
+              # Specific patch for Arcanum src/intrinsics.hpp to map x86 bit ops to ARM/Clang builtins
+              if "intrinsics.hpp" in path:
+                  content = content.replace("return _popcnt64(v);", "return __builtin_popcountll(v);")
+                  content = content.replace("int popIdx = _tzcnt_u64(*bitboard);", "int popIdx = __builtin_ctzll(*bitboard);")
+                  content = content.replace("*bitboard = _blsr_u64(*bitboard);", "*bitboard = (*bitboard) & (*bitboard - 1);")
+                  content = content.replace("return _tzcnt_u64(bitboard);", "return __builtin_ctzll(bitboard);")
+                  content = content.replace("uint64_t lzeros = _lzcnt_u64(v);", "uint64_t lzeros = (v == 0) ? 64 : __builtin_clzll(v);")
+                  content = content.replace("return _pext_u64(v, mask);", "return 0; /* pext emulation fallback */")
+                  content = content.replace("return _lrotl(v, shift);", "return (v << (shift & 63)) | (v >> (64 - (shift & 63)));")
 
               # Fallback for std::aligned_alloc on Android NDK if present
               if "std::aligned_alloc" in content:
@@ -71,9 +81,8 @@ jobs:
           # Set up the Android NDK Clang compiler paths for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           NDK_CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
-          NDK_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
+          NVD_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
 
-          # Fallback: if a Makefile exists, let us check if we can cleanly patch or run manual source compilation
           MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
           
           if [ -n "$MAKEFILE_PATH" ]; then
@@ -94,7 +103,7 @@ jobs:
             sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
             cd "$MAKE_DIR"
-            make CXX="$NDK_CXX" CC="$NDK_CC"
+            make CXX="$NDK_CXX" CC="$NVD_CC"
           else
             echo "No Makefile found, compiling manually via file discovery..."
             SOURCES=$(find . -type f \( -name "*.cpp" -o -name "*.c" \) ! -path "*/build/*" ! -path "*/releases/*")
