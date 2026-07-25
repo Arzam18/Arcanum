@@ -37,10 +37,11 @@ jobs:
           python3 - << 'EOF'
           import os, shutil
 
-          # 1. Completely remove the tuning directory so it cannot be compiled
-          if os.path.exists("src/tuning"):
-              shutil.rmtree("src/tuning")
-              print("Purged src/tuning directory successfully.")
+          # 1. Completely remove the tuning and tests directories so they aren't compiled into the binary
+          for d in ["src/tuning", "src/tests"]:
+              if os.path.exists(d):
+                  shutil.rmtree(d)
+                  print(f"Purged {d} directory successfully.")
 
           # 2. Remove the Makefile to force direct manual compilation
           for root, dirs, files in os.walk("."):
@@ -115,8 +116,8 @@ jobs:
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           NDK_CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
           
-          echo "Discovering source files..."
-          SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \))
+          echo "Discovering source files (excluding tests)..."
+          SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \) -not -path "*/tests/*")
           echo "Found sources: $SOURCES"
           
           echo "Compiling Arcanum for Android ARM64..."
