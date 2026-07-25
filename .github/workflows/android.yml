@@ -1,4 +1,4 @@
-name: Build Arcanum for Android
+name: Build Arcanum for Android with sse2neon
 
 on:
   push:
@@ -20,20 +20,16 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Patch Makefile and Build Arcanum ARM64
+      - name: Inject sxe2neon and Patch Makefile
         run: |
-          # 1. Find the Makefile
+          # 1. Download sse2neon header to bridge Intel intrinsics to ARM NEON
+          curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o src/sse2neon.h
+
+          # 2. Find the Makefile
           MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
-
-          if [ -z "$MAKEFILE_PATH" ]; then
-            echo "Error: No Makefile found in repository!"
-            exit 1
-          fi
-
-          echo "Found Makefile at: $MAKEFILE_PATH"
           MAKE_DIR=$(dirname "$MAKEFILE_PATH")
 
-          # 2. Patch Makefile: Strip x86 specific flags
+          # 3. Clean x86 flags and -Werror
           sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
           sed -i 's/-mfma//g' "$MAKEFILE_PATH"
           sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
@@ -43,15 +39,10 @@ jobs:
           sed -i 's/-march=native//g' "$MAKEFILE_PATH"
           sed -i 's/-Werror//g' "$MAKEFILE_PATH"
 
-          # 3. Exclude the tuning folder from sources so x86 AVX matrix code doesn't get compiled on ARM
-          sed -i 's/SOURCES := $(call rwildcard, $(SOURCEDIR)\/, %.cpp)/SOURCES := $(filter-out %/matrix.cpp, $(call rwildcard, $(SOURCEDIR)\/, %.cpp))/g' "$MAKEFILE_PATH"
-          # Also drop any files inside a tuning directory if they exist
-          sed -i 's/SOURCES := $(filter-out %\/LICENSE, $(SOURCES))/SOURCES := $(filter-out %\/LICENSE, $(SOURCES))\nSOURCES := $(filter-out %\/tuning\/%, $(SOURCES))/g' "$MAKEFILE_PATH"
+          # 4. Inject static linking, ARM Neon SIMD, and force inclusion of sse2neon where immintrin.h is used
+          sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
-          # 4. Inject static C++ standard library linking & ARM neon vector flags into CFLAGS
-          sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
-
-          # 5. Set up the Android NDK Clang compiler path for ARM64 (API 28)
+          # 5. Set up Android NDK Clang compiler path for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           export CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
           export CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
@@ -60,9 +51,8 @@ jobs:
           cd "$MAKE_DIR"
           make CXX="$CXX" CC="$CC"
 
-          # 7. Locate the compiled executable and copy it to a clean artifact folder
+          # 7. Locate and bundle binary
           mkdir -p "${{ github.workspace }}/artifact"
-          
           if [ -f "build/Arcanum" ]; then
             cp build/Arcanum "${{ github.workspace }}/artifact/arcanum"
           elif [ -f "Arcanum" ]; then
