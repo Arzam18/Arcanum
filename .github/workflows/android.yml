@@ -32,7 +32,7 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers, Intrinsics, and Stub Argparser
+      - name: Patch SIMD Headers, Intrinsics, Stub Argparser, and Remove Makefile
         run: |
           python3 - << 'EOF'
           import os, shutil
@@ -41,6 +41,14 @@ jobs:
           if os.path.exists("src/tuning"):
               shutil.rmtree("src/tuning")
               print("Purged src/tuning directory successfully.")
+
+          # 2. Remove the Makefile to force direct manual compilation
+          for root, dirs, files in os.walk("."):
+              for file in files:
+                  if file.lower() == "makefile":
+                      makefile_path = os.path.join(root, file)
+                      os.remove(makefile_path)
+                      print(f"Removed Makefile: {makefile_path}")
 
           def patch_file(path):
               with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -82,7 +90,7 @@ jobs:
                 if file.endswith((".h", ".hpp", ".cpp", ".c")):
                     patch_file(os.path.join(root, file))
 
-          # 2. Replace argsparser.cpp entirely with a robust engine-only runner stub
+          # 3. Replace argsparser.cpp entirely with a robust engine-only runner stub
           argsparser_path = "src/argsparser.cpp"
           with open(argsparser_path, "w", encoding="utf-8") as f:
               f.write("""
@@ -102,50 +110,24 @@ jobs:
           print("Replaced argsparser.cpp with a clean build stub.")
           EOF
 
-      - name: Build Arcanum for Android ARM64 (API 28+)
+      - name: Build Arcanum for Android ARM64 (API 28+) via Direct Compilation
         run: |
-          # Set up the Android NDK Clang compiler paths for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           NDK_CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
-          NDK_CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
-
-          MAKEFILE_PATH=$(find . -iname "makefile" | head -n 1)
           
-          if [ -n "$MAKEFILE_PATH" ]; then
-            echo "Found Makefile, patching for cross-compilation..."
-            MAKE_DIR=$(dirname "$MAKEFILE_PATH")
-            
-            # Clean x86 flags and -Werror from Makefile
-            sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
-            sed -i 's/-mfma//g' "$MAKEFILE_PATH"
-            sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
-            sed -i 's/-mbmi//g' "$MAKEFILE_PATH"
-            sed -i 's/-mpopcnt//g' "$MAKEFILE_PATH"
-            sed -i 's/-mlzcnt//g' "$MAKEFILE_PATH"
-            sed -i 's/-march=native//g' "$MAKEFILE_PATH"
-            sed -i 's/-Werror//g' "$MAKEFILE_PATH"
-
-            # Inject static linking, sse2neon inclusion, and a definition to bypass tuning
-            sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
-
-            cd "$MAKE_DIR"
-            make CXX="$NDK_CXX" CC="$NDK_CC"
-          else
-            echo "No Makefile found, compiling manually via file discovery..."
-            SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \))
-            
-            $NDK_CXX -O3 -flto -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING \
-              -I. -Isrc \
-              $SOURCES -lm -o Arcanum-android-arm64
-          fi
+          echo "Discovering source files..."
+          SOURCES=$(find src -type f \( -name "*.cpp" -o -name "*.c" \))
+          echo "Found sources: $SOURCES"
+          
+          echo "Compiling Arcanum for Android ARM64..."
+          $NDK_CXX -O3 -std=c++17 -pthread -march=armv8-a+simd -static-libstdc++ -include sse2neon.h -DNO_TUNING \
+            -DIS_64BIT -DUSE_POPCNT -DUSE_LZCNT -DARCANUM_VERSION=\"dev_build\" -DENABLE_INCBIN \
+            -I. -Isrc \
+            $SOURCES -lm -o Arcanum-android-arm64
 
           # Organize output binary
           mkdir -p dist/bin
-          if [ -f "build/Arcanum" ]; then
-            cp build/Arcanum dist/bin/arcanum
-          elif [ -f "Arcanum" ]; then
-            cp Arcanum dist/bin/arcanum
-          elif [ -f "Arcanum-android-arm64" ]; then
+          if [ -f "Arcanum-android-arm64" ]; then
             cp Arcanum-android-arm64 dist/bin/arcanum
           else
             find . -maxdepth 3 -type f -executable -not -name "*.sh" -not -name "*.h" -not -name "*.cpp" -not -name "*.o" -exec cp {} dist/bin/arcanum \;
