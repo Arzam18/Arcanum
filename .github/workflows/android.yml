@@ -77,14 +77,13 @@ jobs:
                   content = content.replace("return _tzcnt_u64(bitboard);", "return __builtin_ctzll(bitboard);")
                   content = content.replace("uint64_t lzeros = _lzcnt_u64(v);", "uint64_t lzeros = (v == 0) ? 64 : __builtin_clzll(v);")
                   content = content.replace("return _lrotl(v, shift);", "return (v << (shift & 63)) | (v >> (64 - (shift & 63)));")
-                  # Neutralize the PEXT #error block for ARM compilation
                   content = content.replace('#error "Missing implementation of PEXT"', '/* #error PEXT bypassed */')
                   content = content.replace('return PEXT(v, mask);', 'return 0;')
 
-              # Inject namespace using directive into bitboard.hpp to resolve global lookups cleanly
+              # Inject full namespace using directive into bitboard.hpp
               if "bitboard.hpp" in path:
-                  if "using namespace BitboardLookups;" not in content:
-                      content = "#include \"bitboardlookups.hpp\"\nusing namespace BitboardLookups;\n" + content
+                  if "using namespace Arcanum::BitboardLookups;" not in content:
+                      content = "#include \"bitboardlookups.hpp\"\nusing namespace Arcanum::BitboardLookups;\n" + content
 
               if content != original:
                   with open(path, "w", encoding="utf-8") as f:
