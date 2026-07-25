@@ -78,7 +78,8 @@ jobs:
                   content = content.replace("uint64_t lzeros = _lzcnt_u64(v);", "uint64_t lzeros = (v == 0) ? 64 : __builtin_clzll(v);")
                   content = content.replace("return _lrotl(v, shift);", "return (v << (shift & 63)) | (v >> (64 - (shift & 63)));")
                   content = content.replace('#error "Missing implementation of PEXT"', '/* #error PEXT bypassed */')
-                  content = content.replace('return PEXT(v, mask);', 'return 0;')
+                  # Fix PEXT function body to return 0 explicitly
+                  content = content.replace('return PEXT(v, mask);', 'return 0ULL;')
 
               # Inject full namespace using directive into bitboard.hpp
               if "bitboard.hpp" in path:
