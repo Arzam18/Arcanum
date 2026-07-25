@@ -33,7 +33,7 @@ jobs:
           echo "Found Makefile at: $MAKEFILE_PATH"
           MAKE_DIR=$(dirname "$MAKEFILE_PATH")
 
-          # 2. Patch Makefile: Strip x86 specific flags precisely (-mbmi2 must come before -mbmi)
+          # 2. Patch Makefile: Strip x86 specific flags
           sed -i 's/-mavx2//g' "$MAKEFILE_PATH"
           sed -i 's/-mfma//g' "$MAKEFILE_PATH"
           sed -i 's/-mbmi2//g' "$MAKEFILE_PATH"
@@ -43,19 +43,24 @@ jobs:
           sed -i 's/-march=native//g' "$MAKEFILE_PATH"
           sed -i 's/-Werror//g' "$MAKEFILE_PATH"
 
-          # 3. Inject static C++ standard library linking & ARM neon vector flags into CFLAGS
+          # 3. Exclude the tuning folder from sources so x86 AVX matrix code doesn't get compiled on ARM
+          sed -i 's/SOURCES := $(call rwildcard, $(SOURCEDIR)\/, %.cpp)/SOURCES := $(filter-out %/matrix.cpp, $(call rwildcard, $(SOURCEDIR)\/, %.cpp))/g' "$MAKEFILE_PATH"
+          # Also drop any files inside a tuning directory if they exist
+          sed -i 's/SOURCES := $(filter-out %\/LICENSE, $(SOURCES))/SOURCES := $(filter-out %\/LICENSE, $(SOURCES))\nSOURCES := $(filter-out %\/tuning\/%, $(SOURCES))/g' "$MAKEFILE_PATH"
+
+          # 4. Inject static C++ standard library linking & ARM neon vector flags into CFLAGS
           sed -i 's/override CFLAGS += /override CFLAGS += -march=armv8-a+simd -static-libstdc++ -Wno-error -Wno-unused-parameter -Wno-sign-compare /g' "$MAKEFILE_PATH"
 
-          # 4. Set up the Android NDK Clang compiler path for ARM64 (API 28)
+          # 5. Set up the Android NDK Clang compiler path for ARM64 (API 28)
           TOOLCHAIN="${{ steps.setup-ndk.outputs.ndk-path }}/toolchains/llvm/prebuilt/linux-x86_64"
           export CXX="$TOOLCHAIN/bin/aarch64-linux-android28-clang++"
           export CC="$TOOLCHAIN/bin/aarch64-linux-android28-clang"
 
-          # 5. Build Arcanum
+          # 6. Build Arcanum
           cd "$MAKE_DIR"
           make CXX="$CXX" CC="$CC"
 
-          # 6. Locate the compiled executable and copy it to a clean artifact folder
+          # 7. Locate the compiled executable and copy it to a clean artifact folder
           mkdir -p "${{ github.workspace }}/artifact"
           
           if [ -f "build/Arcanum" ]; then
