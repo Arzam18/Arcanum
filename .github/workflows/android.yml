@@ -53,9 +53,16 @@ jobs:
                   if header in content:
                       content = content.replace(header, "\"sse2neon.h\"")
 
-              # Remove any residual includes pointing to tuning headers
-              content = content.replace("#include \"tuning/nnuetrainer.hpp\"", "")
-              content = content.replace("#include \"tuning/fengen.hpp\"", "")
+              # Remove any residual includes pointing to tuning headers (both quotes and angle brackets)
+              lines = content.splitlines()
+              new_lines = []
+              for line in lines:
+                  if "tuning/" in line and "#include" in line:
+                      continue
+                  if ("fengen" in line or "nnuetrainer" in line) and ("argsparser" in path):
+                      line = "// " + line
+                  new_lines.append(line)
+              content = "\n".join(new_lines)
 
               # Specific patch for Arcanum src/intrinsics.hpp to map x86 bit ops to ARM/Clang builtins
               if "intrinsics.hpp" in path:
