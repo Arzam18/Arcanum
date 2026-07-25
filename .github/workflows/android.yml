@@ -82,34 +82,24 @@ jobs:
                 if file.endswith((".h", ".hpp", ".cpp", ".c")):
                     patch_file(os.path.join(root, file))
 
-          # 2. Replace argsparser.cpp entirely with a clean engine-only runner stub
+          # 2. Replace argsparser.cpp entirely with a robust engine-only runner stub
           argsparser_path = "src/argsparser.cpp"
-          if os.path.exists(argsparser_path) or os.path.exists("src"):
-              stub_code = """
+          with open(argsparser_path, "w", encoding="utf-8") as f:
+              f.write("""
               #include <iostream>
               #include <string>
-              #vector>
-              void parseArguments(int argc, char* argv[]) {
-                  // Minimal stub bypassing training/tuning arguments for Android build
-              }
-              """
-              # Let's write a safe minimal parser implementation that compiles cleanly
-              with open(argsparser_path, "w", encoding="utf-8") as f:
-                  f.write("""
-                  #include <iostream>
-                  #include <string>
-                  #include <vector>
+              #include <vector>
 
-                  void parseArguments(int argc, char* argv[]) {
-                      for (int i = 1; i < argc; ++i) {
-                          std::string arg = argv[i];
-                          if (arg == "uci" || arg == "bench") {
-                              // Handled standard flow
-                          }
+              void parseArguments(int argc, char* argv[]) {
+                  for (int i = 1; i < argc; ++i) {
+                      std::string arg = argv[i];
+                      if (arg == "uci" || arg == "bench") {
+                          // Standard execution flow
                       }
                   }
-                  """)
-              print("Replaced argsparser.cpp with a clean build stub.")
+              }
+              """)
+          print("Replaced argsparser.cpp with a clean build stub.")
           EOF
 
       - name: Build Arcanum for Android ARM64 (API 28+)
