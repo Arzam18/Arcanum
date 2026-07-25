@@ -32,7 +32,7 @@ jobs:
         run: |
           curl -sL https://raw.githubusercontent.com/DLTcollab/sse2neon/master/sse2neon.h -o sse2neon.h
 
-      - name: Patch SIMD Headers, Intrinsics, and Strip Tuning Code
+      - name: Patch SIMD Headers, Intrinsics, and Cleanly Strip Tuning Commands
         run: |
           python3 - << 'EOF'
           import os, shutil
@@ -60,17 +60,39 @@ jobs:
               for line in lines:
                   if "tuning/" in line and "#include" in line:
                       continue
-                  
-                  # If we are in argsparser.cpp, filter out training command blocks cleanly
-                  if "argsparser.cpp" in path:
-                      if 'command == "train"' in line or 'command == "gen"' in line or 'command == "merge"' in line:
-                          line = "// " + line
-                      if "FengenParameters" in line or "TrainingParameters" in line or "NNUETrainer" in line or "DataMerger" in line or "Fengen::start" in line:
-                          line = "// " + line
-
                   new_lines.append(line)
               
               content = "\n".join(new_lines)
+
+              # Specific patch for argsparser.cpp to gracefully handle removed tuning/test commands
+              if "argsparser.cpp" in path:
+                lines = content.splitlines()
+                new_lines = []
+                skip_brace_count = 0
+                in_tuning_block = False
+                
+                for line in lines:
+                    # Check if this line starts a tuning/training/test command block
+                    if any(cmd in line for cmd in ['"train"', '"gen"', '"merge"', '"test"']):
+                        in_tuning_block = True
+                        skip_brace_count = line.count('{') - line.count('}')
+                        new_lines.append("// " + line)
+                        continue
+                    
+                    if in_tuning_block:
+                        skip_brace_count += line.count('{') - line.count('}')
+                        new_lines.append("// " + line)
+                        if skip_brace_count <= 0:
+                            in_tuning_block = False
+                        continue
+                        
+                    # If previous line was commented out and this is an else if, convert to if to fix syntax
+                    stripped = line.strip()
+                    if stripped.startswith("else if") and new_lines and new_lines[-1].strip().startswith("//"):
+                        line = line.replace("else if", "if", 1)
+                        
+                    new_lines.append(line)
+                content = "\n".join(new_lines)
 
               # Specific patch for Arcanum src/intrinsics.hpp to map x86 bit ops to ARM/Clang builtins
               if "intrinsics.hpp" in path:
