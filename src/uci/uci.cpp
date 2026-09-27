@@ -11,7 +11,7 @@
 using namespace Arcanum;
 using namespace Arcanum::Interface;
 
-bool        UCI::isSearching = false;
+std::atomic<bool> UCI::isSearching = false;
 std::thread UCI::searchThread;
 Board       UCI::board(FEN::startpos);
 Searcher    UCI::searcher;
@@ -105,6 +105,14 @@ void UCI::go(std::istringstream& is)
             {
                 toLowerCase(token);
                 Move move = getMoveFromUciString(token, board);
+
+                if(move.isNull() || (parameters.numSearchMoves >= MaxMoveCount - 1))
+                {
+                    // Undo the last read token from the input stream
+                    is.seekg(-token.size(), std::ios_base::cur);
+                    break;
+                };
+
                 parameters.searchMoves[parameters.numSearchMoves++] = move;
             }
         }
@@ -143,14 +151,19 @@ void UCI::go(std::istringstream& is)
 
     if(!UCI::isSearching)
     {
+        if(UCI::searchThread.joinable())
+        {
+            UCI::searchThread.join();
+        }
+
         // Set isSearching before creating the thread.
         // This is to make sure it is set before returning from go.
         UCI::isSearching = true;
-        UCI::searchThread = std::thread([&](SearchParameters _parameters) {
-            UCI::searcher.search(board, _parameters);
+        UCI::searchThread = std::thread([&](SearchParameters _parameters, Board _board) {
+            UCI::searcher.search(_board, _parameters);
             // Set isSearching to false when the search is done in the thread
             UCI::isSearching = false;
-        }, parameters);
+        }, parameters, board);
     }
 }
 
@@ -356,7 +369,26 @@ Move UCI::getMoveFromUciString(const std::string& uciStr, const Board& board)
 {
     if((uciStr.length() < 4) || (uciStr.length() > 5))
     {
-        WARNING("UCI string has to be 4 or 5 characters long: " << uciStr)
+        return NULL_MOVE;
+    }
+
+    if(uciStr[0] < 'a' || uciStr[0] > 'h')
+    {
+        return NULL_MOVE;
+    }
+
+    if(uciStr[1] < '1' || uciStr[1] > '8')
+    {
+        return NULL_MOVE;
+    }
+
+    if(uciStr[2] < 'a' || uciStr[2] > 'h')
+    {
+        return NULL_MOVE;
+    }
+
+    if(uciStr[3] < '1' || uciStr[3] > '8')
+    {
         return NULL_MOVE;
     }
 
@@ -373,7 +405,6 @@ Move UCI::getMoveFromUciString(const std::string& uciStr, const Board& board)
             case 'b': promoteInfo = MoveInfoBit::PROMOTE_BISHOP; break;
             case 'n': promoteInfo = MoveInfoBit::PROMOTE_KNIGHT; break;
             default:
-                WARNING("Invalid promotion piece in UCI string: " << uciStr)
                 return NULL_MOVE;
         }
     }

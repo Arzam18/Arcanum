@@ -77,7 +77,7 @@ void Searcher::clear()
 
 eval_t Searcher::m_adjustEval(eval_t rawEval, Board& board)
 {
-    if(board.isChecked() || Evaluator::isMateScore(rawEval))
+    if(board.isChecked() || Evaluator::isMateScore(rawEval) || !board.hasLegalMove())
     {
         return rawEval;
     }
@@ -87,7 +87,7 @@ eval_t Searcher::m_adjustEval(eval_t rawEval, Board& board)
 }
 
 template <bool isPv>
-eval_t Searcher::m_alphaBetaQuiet(Board& board, eval_t alpha, eval_t beta, int plyFromRoot)
+eval_t Searcher::m_alphaBetaQuiet(Board& board, eval_t alpha, eval_t beta, uint32_t plyFromRoot)
 {
     if(m_shouldStop())
     {
@@ -186,6 +186,11 @@ eval_t Searcher::m_alphaBetaQuiet(Board& board, eval_t alpha, eval_t beta, int p
         return staticEval;
     }
 
+    if(plyFromRoot >= MaxSearchPly - 1)
+    {
+        return staticEval;
+    }
+
     // Push the board on the search stack
     m_searchStacks.hashes     [plyFromRoot] = board.getHash();
     m_searchStacks.staticEvals[plyFromRoot] = staticEval;
@@ -249,7 +254,7 @@ eval_t Searcher::m_alphaBetaQuiet(Board& board, eval_t alpha, eval_t beta, int p
 }
 
 template <bool isPv>
-eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth, int plyFromRoot, bool cutnode, uint8_t totalExtensions, Move skipMove)
+eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth, uint32_t plyFromRoot, bool cutnode, uint8_t totalExtensions, Move skipMove)
 {
     if(depth <= 0)
     {
@@ -393,14 +398,18 @@ eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth,
 
     if(numMoves == 0)
     {
-        return skipMove.isNull() ? staticEval : alpha;
+        return staticEval;
+    }
+
+    if(plyFromRoot >= MaxSearchPly - 1)
+    {
+        return staticEval;
     }
 
     board.generateCaptureInfo();
     bool isChecked = board.isChecked();
     bool isImproving = (plyFromRoot > 1) && (staticEval > m_searchStacks.staticEvals[plyFromRoot - 2]);
     bool isWorsening = (plyFromRoot > 1) && (staticEval < m_searchStacks.staticEvals[plyFromRoot - 2]);
-    bool opponentHasEasyCapture = board.hasEasyCapture(Color(board.getTurn()^1));
     Move prevMove = m_searchStacks.moves[plyFromRoot-1];
     bool isNullMoveSearch = prevMove.isNull();
 
@@ -414,7 +423,9 @@ eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth,
         // Reverse futility pruning
         if(!Evaluator::isCloseToMate(board, beta) && depth < 9)
         {
-            if(staticEval - 150 * (depth - !opponentHasEasyCapture)  >= beta)
+            bool opponentHasEasyCapture = board.hasEasyCapture(Color(board.getTurn()^1));
+            eval_t futilityMargin = std::max(50, 100 * depth - 100 * (!opponentHasEasyCapture));
+            if(staticEval - futilityMargin >= beta)
             {
                 m_stats.reverseFutilityCutoffs++;
                 return (staticEval + beta) / 2;
@@ -737,7 +748,11 @@ eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth,
 
         m_tt.add(bestScore, bestMove, isPv, depth, plyFromRoot, rawEval, flag, board.getHash());
 
-        if (!board.isChecked() && !bestMove.isCapture() && ((flag == TTFlag::EXACT) || (flag == (bestScore >= staticEval ? TTFlag::LOWER_BOUND : TTFlag::UPPER_BOUND)))) {
+        if (!board.isChecked()
+        && !Evaluator::isMateScore(bestScore)
+        && !bestMove.isCapture()
+        && !bestMove.isNull()
+        && ((flag == TTFlag::EXACT) || (flag == (bestScore >= staticEval ? TTFlag::LOWER_BOUND : TTFlag::UPPER_BOUND)))) {
             m_heuristics.correctionHistory.update(board, bestScore, staticEval, depth);
         }
     }
@@ -745,7 +760,7 @@ eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth,
     return bestScore;
 }
 
-inline bool Searcher::m_isDraw(const Board& board, uint8_t plyFromRoot) const
+inline bool Searcher::m_isDraw(const Board& board, uint32_t plyFromRoot) const
 {
     // Check for repeated positions in the current search
     // * Only check for boards backwards until captures occur (halfMoves)

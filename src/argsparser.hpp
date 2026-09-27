@@ -14,6 +14,20 @@ namespace Arcanum
             {
                 std::string token = std::string(argv[index]);
                 toLowerCase(token);
+
+                // Singular pattern match (e.g., --flag)
+                if constexpr (std::is_same_v<T, bool>)
+                {
+                    if(pattern == token)
+                    {
+                        index++; // Only increment if the pattern matches
+                        out = true;
+                        return true;
+                    }
+                    return false;
+                }
+
+                // Pattern match with value (e.g., --option value)
                 if(pattern == token && index + 1 < argc)
                 {
                     index++; // Only increment if the pattern matches
@@ -35,7 +49,7 @@ namespace Arcanum
                     }
                     else if constexpr (std::is_same_v<T, int16_t>)
                     {
-                        out = std::stoul(std::string(argv[index++]));
+                        out = static_cast<int16_t>(std::stoul(std::string(argv[index++])));
                     }
                     else
                     {
@@ -49,6 +63,11 @@ namespace Arcanum
             static bool parseArgumentsAndRunFengen(int argc, char* argv[]);
             static bool parseArgumentsAndRunNnueTrainer(int argc, char* argv[]);
             static bool parseArgumentsAndMergeData(int argc, char* argv[]);
+            static bool parseArgumentsAndReeval(int argc, char* argv[]);
+            static bool parseArgumentsAndQuiesce(int argc, char* argv[]);
+            static bool parseArgumentsAndAnalyse(int argc, char* argv[]);
+            static bool parseArgumentsAndDeduplicate(int argc, char* argv[]);
+            static bool parseArgumentsAndFilter(int argc, char* argv[]);
         public:
             // Parses command line arguments and runs UCI if the arguments are valid
             // Returns false if the arguments are not matching any commands

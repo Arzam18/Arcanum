@@ -27,7 +27,7 @@ namespace Arcanum
             {
                 alignas(64) int16_t ftWeights[L1Size * FTSize];
                 alignas(64) int16_t ftBiases[L1Size];
-                alignas(64) int8_t  l1Weights[NumOutputBuckets][1 * L1Size];
+                alignas(64) int16_t l1Weights[NumOutputBuckets][1 * L1Size];
                 alignas(64) int32_t l1Biases[NumOutputBuckets][1];
             };
 
@@ -61,16 +61,15 @@ namespace Arcanum
             void load(const std::string filename);
             void initializeAccumulator(Accumulator* acc, const Board& board);
             void incrementAccumulator(Accumulator* acc, Accumulator* nextAcc, const Board& board, const Move& move);
-            void incrementAccumulatorPerspective(Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
+            void incrementAccumulatorPerspective(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
             eval_t predict(const Accumulator* acc, const Board& board);
             eval_t predictBoard(const Board& board);
         private:
             Net* m_net;
-            void m_accAddSub(Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
-            void m_accAddSubSub(Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
-            void m_accAddAddSubSub(Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
-            void m_l1AffineTransform(const uint8_t* in, int8_t* weights, int32_t* biases, int32_t* out);
-            void m_clampAcc(const int16_t* in, uint8_t* out);
+            void m_accAddSub(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
+            void m_accAddSubSub(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
+            void m_accAddAddSubSub(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
+            int32_t m_l1AffineTransform(const int16_t* in, const int16_t* weights, const int32_t* biases);
     };
 
 }
