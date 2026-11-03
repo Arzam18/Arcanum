@@ -14,7 +14,7 @@ namespace Arcanum
             static constexpr int32_t NetworkScale = 400;
             static constexpr int32_t FTQ = 255; // Quantization factor of the feature transformer
             static constexpr int32_t LQ = 64;   // Quantization factor of the linear layers
-            static constexpr uint32_t NumOutputBuckets = 1;
+            static constexpr uint32_t NumOutputBuckets = 8;
 
             struct Accumulator
             {
@@ -60,7 +60,6 @@ namespace Arcanum
             ~NNUE();
             void load(const std::string filename);
             void initializeAccumulator(Accumulator* acc, const Board& board);
-            void incrementAccumulator(Accumulator* acc, Accumulator* nextAcc, const Board& board, const Move& move);
             void incrementAccumulatorPerspective(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
             eval_t predict(const Accumulator* acc, const Board& board);
             eval_t predictBoard(const Board& board);

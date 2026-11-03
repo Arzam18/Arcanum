@@ -7,6 +7,9 @@
 
 using namespace Arcanum;
 
+TUNABLE_PARAM(timeParam1, 2018, 0, 3000)
+TUNABLE_PARAM(timeParam2, 1392, 0, 3000)
+
 #define DRAW_VALUE 0
 
 Searcher::Searcher(bool verbose) :
@@ -215,6 +218,12 @@ eval_t Searcher::m_alphaBetaQuiet(Board& board, eval_t alpha, eval_t beta, uint3
         m_searchStacks.moves[plyFromRoot] = *move;
         eval_t score = -m_alphaBetaQuiet<isPv>(newBoard, -beta, -alpha, plyFromRoot + 1);
         m_evaluator.popMoveFromAccumulator();
+
+        // The score is invalid if the search was stopped, avoid polluting heuristics
+        if(m_shouldStop())
+        {
+            return 0;
+        }
 
         if(score > bestScore)
         {
@@ -678,6 +687,12 @@ eval_t Searcher::m_alphaBeta(Board& board, eval_t alpha, eval_t beta, int depth,
 
         m_evaluator.popMoveFromAccumulator();
 
+        // The score is invalid if the search was stopped, avoid polluting heuristics
+        if(m_shouldStop())
+        {
+            return 0;
+        }
+
         if(score > alpha)
         {
             alpha = score;
@@ -793,6 +808,7 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
 {
     eval_t searchScore = 0;
     Move searchBestMove = NULL_MOVE;
+    uint8_t searchBestMoveIndex = 0;
 
     m_tbHits = 0;
     m_stopSearch = false;
@@ -809,22 +825,23 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
     m_tt.incrementGeneration();
     m_timer.start();
 
-    // Copy the search moves from the parameters
-    Move* moves = m_parameters.searchMoves;
-    uint8_t numMoves = m_parameters.numSearchMoves;
+    // Find all legal moves
+    // This is needed even if the moves are provided, as it also initializes
+    // parts of the internal board state which such as pinners and blocker, which SEE and moveordering relies on.
+    Move* moves = board.getLegalMoves();
+    uint8_t numMoves = board.getNumLegalMoves();
+    board.generateCaptureInfo();
 
-    // Only generate moves or probe tablebase if no search moves are provided
-    Syzygy::WDLResult tbResult = Syzygy::WDLResult::FAILED;
-    if(numMoves == 0)
+    // If search moves are provided, override the generated moves.
+    if(m_parameters.numSearchMoves > 0)
     {
-        tbResult = Syzygy::TBProbeDTZ(board, moves, numMoves);
-        if(tbResult == Syzygy::WDLResult::FAILED)
-        {
-            moves = board.getLegalMoves();
-            numMoves = board.getNumLegalMoves();
-            board.generateCaptureInfo();
-        }
+        moves = m_parameters.searchMoves;
+        numMoves = m_parameters.numSearchMoves;
     }
+
+    // Probe the Syzygy tablebase.
+    // If it fails, it will not affect the moves list
+    Syzygy::WDLResult tbResult = Syzygy::TBProbeDTZ(board, moves, numMoves);
 
     m_evaluator.initAccumulatorStack(board);
     eval_t rawEval = m_evaluator.evaluate(board, 0);
@@ -835,10 +852,13 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
     m_searchStacks.staticEvals[0] = staticEval;
     m_searchStacks.moves[0]       = NULL_MOVE;
 
+    uint64_t moveNodeCount[MaxMoveCount] = {0};
+
     for(uint32_t depth = 1; depth <= m_parameters.depth; depth++)
     {
         m_rootDepth = depth;
         Move bestMove = NULL_MOVE;
+        uint8_t bestMoveIndex = 0;
         eval_t alpha = -Evaluator::MateScore;
         eval_t beta = Evaluator::MateScore;
         eval_t aspirationWindowAlpha = 35;
@@ -869,12 +889,14 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
             for (int i = 0; i < numMoves; i++)
             {
                 const Move *move = moveSelector.getNextMove();
+                uint8_t moveIndex = (move - moves);
                 Board newBoard = Board(board);
                 newBoard.performMove(*move);
                 m_tt.prefetch(newBoard.getHash());
                 m_evaluator.pushMoveToAccumulator(board, *move);
                 m_searchStacks.moves[0] = *move;
 
+                uint64_t nodesBefore = m_numNodesSearched;
                 eval_t score;
                 if(i == 0)
                 {
@@ -888,6 +910,7 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
                         aspirationWindowAlpha += aspirationWindowAlpha;
                         m_evaluator.popMoveFromAccumulator();
                         m_stats.aspirationAlphaFails++;
+                        moveNodeCount[moveIndex] += m_numNodesSearched - nodesBefore;
                         break;
                     }
                 }
@@ -901,6 +924,7 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
                     }
                 }
 
+                moveNodeCount[moveIndex] += m_numNodesSearched - nodesBefore;
                 m_evaluator.popMoveFromAccumulator();
 
                 if(m_shouldStop())
@@ -924,6 +948,7 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
                     m_pvTable.updatePv(*move, 0);
                     alpha = score;
                     bestMove = *move;
+                    bestMoveIndex = moveIndex;
                 }
             }
         }
@@ -936,6 +961,7 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
         {
             searchScore = alpha;
             searchBestMove = bestMove;
+            searchBestMoveIndex = bestMoveIndex;
         }
 
         // Send UCI info
@@ -950,6 +976,25 @@ Move Searcher::search(Board board, SearchParameters parameters, SearchResult* se
 
         // Store the result in the transposition table
         m_tt.add(searchScore, searchBestMove, true, depth, 0, rawEval, TTFlag::EXACT, board.getHash());
+
+        // Check if the soft time limit has been reached
+        if(m_parameters.useSoftTime)
+        {
+            // Adjust soft limit based on the fraction of nodes visited for the best root move
+            // If the fraction of nodes is high, it is likely that there are not any close contenders
+            int64_t bestMoveNodeScale = 1000;
+            if(m_numNodesSearched != 0)
+            {
+                bestMoveNodeScale = int64_t(timeParam1) - int64_t(timeParam2) * moveNodeCount[searchBestMoveIndex] / m_numNodesSearched;
+            }
+
+            int64_t adjustedSoftTime = m_parameters.softTime * bestMoveNodeScale / 1000;
+            if(m_timer.getMs() >= adjustedSoftTime)
+            {
+                m_stopSearch = true;
+                break;
+            }
+        }
     }
 
     m_stats.nodes += m_numNodesSearched;

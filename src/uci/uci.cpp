@@ -17,7 +17,7 @@ Board       UCI::board(FEN::startpos);
 Searcher    UCI::searcher;
 std::vector<Option*> Option::options;
 
-SpinOption   UCI::optionHash         = SpinOption("Hash", 32, 0, 2048, []{ UCI::searcher.resizeTT(UCI::optionHash.value); });
+SpinOption   UCI::optionHash         = SpinOption("Hash", 32, 0, 8192, []{ UCI::searcher.resizeTT(UCI::optionHash.value); });
 ButtonOption UCI::optionClearHash    = ButtonOption("ClearHash", []{ UCI::searcher.clear(); });
 StringOption UCI::optionSyzygyPath   = StringOption("SyzygyPath", "<empty>", []{ Syzygy::TBInit(UCI::optionSyzygyPath.value); });
 StringOption UCI::optionNNUEPath     = StringOption("NNUEPath", TOSTRING(DEFAULT_NNUE), []{ Evaluator::nnue.load(UCI::optionNNUEPath.value); });
@@ -94,35 +94,18 @@ void UCI::go(std::istringstream& is)
     int64_t inc[2] = {0, 0};
     int64_t movesToGo = -1;
     int32_t perftDepth = 0;
-    bool requireTimeAlloc[2] = {false, false};
 
     while(is >> token)
     {
         toLowerCase(token);
-        if(token == "searchmoves")
-        {
-            while (is >> token)
-            {
-                toLowerCase(token);
-                Move move = getMoveFromUciString(token, board);
-
-                if(move.isNull() || (parameters.numSearchMoves >= MaxMoveCount - 1))
-                {
-                    // Undo the last read token from the input stream
-                    is.seekg(-token.size(), std::ios_base::cur);
-                    break;
-                };
-
-                parameters.searchMoves[parameters.numSearchMoves++] = move;
-            }
-        }
-        else if(token == "wtime"     ) { is >> time[Color::WHITE]; requireTimeAlloc[Color::WHITE] = true; }
-        else if(token == "btime"     ) { is >> time[Color::BLACK]; requireTimeAlloc[Color::BLACK] = true; }
+        if(token == "searchmoves"    ) { findSearchMoves(is, parameters); }
+        else if(token == "wtime"     ) { is >> time[Color::WHITE]; }
+        else if(token == "btime"     ) { is >> time[Color::BLACK]; }
         else if(token == "winc"      ) { is >> inc[Color::WHITE]; }
         else if(token == "binc"      ) { is >> inc[Color::BLACK]; }
         else if(token == "depth"     ) { is >> parameters.depth;  parameters.useDepth = true; }
         else if(token == "nodes"     ) { is >> parameters.nodes;  parameters.useNodes = true; }
-        else if(token == "movetime"  ) { is >> parameters.msTime; parameters.useTime  = true; }
+        else if(token == "movetime"  ) { is >> parameters.msTime; }
         else if(token == "movestogo" ) { is >> movesToGo;            }
         else if(token == "perft"     ) { is >> perftDepth;           }
         else if(token == "infinite"  ) { parameters.infinite = true; }
@@ -138,15 +121,25 @@ void UCI::go(std::istringstream& is)
         return;
     }
 
-    // Subtract moveOverhead from moveTime
-    if(parameters.msTime != 0) parameters.msTime = std::max(parameters.msTime - optionMoveOverhead.value, int64_t(1));
-
-    // Allocate time
     Color turn = board.getTurn();
-    if(requireTimeAlloc[turn])
+    if(parameters.msTime > 0)
     {
         parameters.useTime = true;
-        parameters.msTime = getAllocatedTime(time[turn], inc[turn], movesToGo, parameters.msTime, optionMoveOverhead.value);
+        parameters.msTime = TimeManager::getMoveTimeAllocation(parameters.msTime, optionMoveOverhead.value);
+    }
+    else if((movesToGo > 0) && (time[turn] > 0))
+    {
+        parameters.useTime = true;
+        parameters.useSoftTime = true;
+        parameters.softTime = TimeManager::getTimeAllocationMovesToGo(time[turn], inc[turn], movesToGo, optionMoveOverhead.value);
+        parameters.msTime = TimeManager::getMaxTimeAllocationMovesToGo(time[turn], inc[turn], movesToGo, optionMoveOverhead.value);
+    }
+    else if(time[turn] > 0)
+    {
+        parameters.useTime = true;
+        parameters.useSoftTime = true;
+        parameters.softTime = TimeManager::getTimeAllocation(time[turn], inc[turn], optionMoveOverhead.value);
+        parameters.msTime = TimeManager::getMaxTimeAllocation(time[turn], inc[turn], optionMoveOverhead.value);
     }
 
     if(!UCI::isSearching)
@@ -257,6 +250,7 @@ void UCI::help()
     UCI_OUT("\t[nodes <nodes>]                     - Maximum number of nodes to search")
     UCI_OUT("\t[movetime <movetime>]               - Maximum time to search (ms)")
     UCI_OUT("\t[infinite]                          - Search until stop command is given")
+    UCI_OUT("\t[searchmoves <list of moves>]       - Search only the given moves")
     UCI_OUT("go perft <depth>                      - Run perft to given depth")
     UCI_OUT("stop                                  - Stop any currently ongoing search")
     UCI_OUT("position                              - Set the current position")
@@ -363,6 +357,11 @@ void UCI::sendBestMove(const Move& move)
     UCI_OUT("bestmove " << move)
 }
 
+void UCI::sendInfoString(const std::string& info)
+{
+    UCI_OUT("info string " << info)
+}
+
 // Generate a Move object from a UCI move string (e.g. e2e4, e7e8q)
 // Note: This not check if the move is legal in the given position
 Move UCI::getMoveFromUciString(const std::string& uciStr, const Board& board)
@@ -410,4 +409,67 @@ Move UCI::getMoveFromUciString(const std::string& uciStr, const Board& board)
     }
 
     return board.generateMoveWithInfo(from, to, promoteInfo);
+}
+
+void UCI::findSearchMoves(std::istringstream& is, SearchParameters& parameters)
+{
+    // Generate legal moves for the current position to check if the moves are legal
+    Move* moves = board.getLegalMoves();
+    uint8_t numMoves = board.getNumLegalMoves();
+    board.generateCaptureInfo();
+
+    std::string token;
+    while (is >> token)
+    {
+        toLowerCase(token);
+        Move move = getMoveFromUciString(token, board);
+
+        // If the move is null, it is not a valid UCI move string
+        // Assume that it is the beginning of the next parameter in the UCI command
+        if(move.isNull())
+        {
+            // Undo the last read token from the input stream
+            is.seekg(-static_cast<std::streamoff>(token.size()), std::ios_base::cur);
+            break;
+        }
+
+        // Check if the move is legal
+        bool legal = false;
+        for(uint8_t i = 0; i < numMoves; ++i)
+        {
+            if(moves[i] == move)
+            {
+                legal = true;
+                break;
+            }
+        }
+
+        // If the move is not legal, send an info string
+        if(!legal)
+        {
+            UCI::sendInfoString("Illegal move in current position: " + token);
+            continue;
+        }
+
+        // Protect against duplicate moves in the search moves list
+        bool duplicate = false;
+        for(uint8_t i = 0; i < parameters.numSearchMoves; ++i)
+        {
+            if(parameters.searchMoves[i] == move)
+            {
+                duplicate = true;
+                break;
+            }
+        }
+
+        if(duplicate)
+        {
+            UCI::sendInfoString("Duplicate move in search moves list: " + token);
+            continue;
+        }
+
+        // Should not need to check for list overflow since
+        // duplicates and illegal moves are already filtered out
+        parameters.searchMoves[parameters.numSearchMoves++] = move;
+    }
 }

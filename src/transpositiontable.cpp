@@ -26,12 +26,12 @@ TranspositionTable::~TranspositionTable()
     }
 }
 
-void TranspositionTable::resize(uint32_t mbSize)
+void TranspositionTable::resize(size_t mbSize)
 {
     if(m_mbSize == mbSize) return;
 
     TTCluster* newTable = nullptr;
-    size_t numClusters = (mbSize * 1024 * 1024) / sizeof(TTCluster);
+    size_t numClusters = (mbSize * 1024ULL * 1024ULL) / sizeof(TTCluster);
     size_t numEntries = NumClusterEntries * numClusters;
 
     if(mbSize != 0)
@@ -105,12 +105,14 @@ inline eval_t TranspositionTable::m_fromTTEval(eval_t eval, uint8_t plyFromRoot)
     return eval;
 }
 
-void TranspositionTable::prefetch(hash_t hash)
+void TranspositionTable::prefetch([[maybe_unused]] hash_t hash)
 {
+#if defined(USE_PREFETCH)
     if(m_table != nullptr)
     {
         _mm_prefetch(&m_table[m_getClusterIndex(hash)], _MM_HINT_T0);
     }
+#endif
 }
 
 void TranspositionTable::incrementGeneration()

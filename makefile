@@ -4,15 +4,21 @@ BUILDDIR ?= build
 RELEASEDIR ?= releases
 SOURCEDIR = src
 HEADERDIR = src
-DEFAULT_NNUE = arcanum-net-v6.0.fnnue
+DEFAULT_NNUE = arcanum-net-v7.0.fnnue
+ARCH ?= x86_64
 CXX = clang++
 
-DEFINES += -DIS_64BIT
+ifeq ($(ARCH),x86_64)
 DEFINES += -DUSE_AVX2 -mavx2 -mfma
 DEFINES += -DUSE_BMI -mbmi
 DEFINES += -DUSE_BMI2 -mbmi2
 DEFINES += -DUSE_POPCNT -mpopcnt
 DEFINES += -DUSE_LZCNT -mlzcnt
+DEFINES += -DUSE_PREFETCH
+else ifeq ($(ARCH),arm64)
+DEFINES += -DUSE_NEON
+endif
+
 DEFINES += -DARCANUM_VERSION=$(VERSION)
 DEFINES += -DDEFAULT_NNUE=$(DEFAULT_NNUE)
 DEFINES += -DENABLE_INCBIN # Remove to disable using incbin for DEFAULT_NNUE
@@ -20,10 +26,14 @@ DEFINES += -DENABLE_INCBIN # Remove to disable using incbin for DEFAULT_NNUE
 RELEASE_DEFINES += -DLOG_FILE_NAME=$(ENGINENAME)
 RELEASE_DEFINES += -DDISABLE_DEBUG
 
+TUNING_DEFINES += -DENABLE_TUNING
+
 override CFLAGS += -std=c++17 -O3 -Wall -Wextra -pedantic $(DEFINES)
 LDFLAGS = --static -lstdc++ -lm
 
-ifeq ($(OS),Windows_NT)
+ifeq ($(ARCH),arm64)
+FILENAME = $(ENGINENAME)
+else ifeq ($(OS),Windows_NT)
 FILENAME = $(ENGINENAME).exe
 else
 FILENAME = $(ENGINENAME)
@@ -35,7 +45,7 @@ SOURCES := $(filter %.cpp, $(ALL_FILES))					# Find all .cpp files
 HEADERS := $(filter %.hpp, $(ALL_FILES))					# Find all .hpp files
 OBJECTS := $(addprefix $(BUILDDIR)/,$(SOURCES:%.cpp=%.o))	# Create list of all object files
 
-.PHONY: uci run test perf release
+.PHONY: uci run test perf release tunable
 
 all: $(BUILDDIR)/$(FILENAME)
 
@@ -50,6 +60,9 @@ selfplay: $(BUILDDIR)/$(FILENAME)
 
 enginetest: $(BUILDDIR)/$(FILENAME)
 	./$^ test --engine
+
+tunable:
+	make -j "CFLAGS=$(RELEASE_DEFINES) $(TUNING_DEFINES)" VERSION="Tunable"
 
 release: $(RELEASEDIR)
 	make clean
