@@ -396,7 +396,24 @@ eval_t NNUE::predict(const Accumulator* acc, const Board& board)
 {
     uint32_t bucket = getOutputBucket(board);
 
-    int32_t l1Out = m_l1AffineTransform(acc->acc[board.getTurn()], m_net->l1Weights[bucket], m_net->l1Biases[bucket]);
+    int32_t l1Out;
+#if defined(USE_DOTPROD) && defined(__ARM_FEATURE_DOTPROD)
+    if(m_net->l1DotProdAvailable[bucket])
+    {
+        l1Out = m_l1AffineTransformDotProd(acc->acc[board.getTurn()],
+                                           m_net->l1WeightsLow[bucket],
+                                           m_net->l1WeightsHigh[bucket],
+                                           m_net->l1WeightCorrection[bucket],
+                                           m_net->l1DotProdHighBytesZero[bucket],
+                                           m_net->l1Biases[bucket]);
+    }
+    else
+    {
+        l1Out = m_l1AffineTransform(acc->acc[board.getTurn()], m_net->l1Weights[bucket], m_net->l1Biases[bucket]);
+    }
+#else
+    l1Out = m_l1AffineTransform(acc->acc[board.getTurn()], m_net->l1Weights[bucket], m_net->l1Biases[bucket]);
+#endif
 
     return static_cast<eval_t>((l1Out * NetworkScale) / (FTQ * LQ));
 }
@@ -482,6 +499,57 @@ inline int32_t NNUE::m_l1AffineTransform(const int16_t* in, const int16_t* weigh
 #endif
 }
 
+
+#if defined(USE_DOTPROD) && defined(__ARM_FEATURE_DOTPROD)
+// Exact int16 x uint8 dot product using SDOT. Most Arcanum output weights
+// are already signed-byte values, so those buckets need only one SDOT stream.
+// Wider int16 weights use a second high-byte stream; both paths preserve the
+// original quantized network values exactly.
+inline int32_t NNUE::m_l1AffineTransformDotProd(const int16_t* in,
+                                                const int8_t* weightsLow,
+                                                const int8_t* weightsHigh,
+                                                int64_t correction,
+                                                bool highBytesZero,
+                                                const int32_t* biases)
+{
+    const int16x8_t zero = vdupq_n_s16(0);
+    const int16x8_t clip = vdupq_n_s16(FTQ);
+    const uint8x16_t offset = vdupq_n_u8(128);
+    int32x4_t lowAcc = vdupq_n_s32(0);
+
+    if(highBytesZero)
+    {
+        for(uint32_t i = 0; i < L1Size; i += 16)
+        {
+            int16x8_t a0 = vminq_s16(vmaxq_s16(vld1q_s16(in + i), zero), clip);
+            int16x8_t a1 = vminq_s16(vmaxq_s16(vld1q_s16(in + i + 8), zero), clip);
+            uint8x16_t unsignedActivations = vcombine_u8(vqmovun_s16(a0), vqmovun_s16(a1));
+            int8x16_t centeredActivations = vreinterpretq_s8_u8(vsubq_u8(unsignedActivations, offset));
+            lowAcc = vdotq_s32(lowAcc, centeredActivations, vld1q_s8(weightsLow + i));
+        }
+
+        const int64_t result = static_cast<int64_t>(vaddvq_s32(lowAcc)) + correction + biases[0];
+        return static_cast<int32_t>(result);
+    }
+
+    int32x4_t highAcc = vdupq_n_s32(0);
+    for(uint32_t i = 0; i < L1Size; i += 16)
+    {
+        int16x8_t a0 = vminq_s16(vmaxq_s16(vld1q_s16(in + i), zero), clip);
+        int16x8_t a1 = vminq_s16(vmaxq_s16(vld1q_s16(in + i + 8), zero), clip);
+        uint8x16_t unsignedActivations = vcombine_u8(vqmovun_s16(a0), vqmovun_s16(a1));
+        int8x16_t centeredActivations = vreinterpretq_s8_u8(vsubq_u8(unsignedActivations, offset));
+        lowAcc = vdotq_s32(lowAcc, centeredActivations, vld1q_s8(weightsLow + i));
+        highAcc = vdotq_s32(highAcc, centeredActivations, vld1q_s8(weightsHigh + i));
+    }
+
+    const int64_t lowSum = vaddvq_s32(lowAcc);
+    const int64_t highSum = vaddvq_s32(highAcc);
+    const int64_t result = lowSum + 256LL * highSum + correction + biases[0];
+    return static_cast<int32_t>(result);
+}
+#endif
+
 void NNUE::load(const std::string filename)
 {
     NNUEParser parser;
@@ -499,6 +567,33 @@ void NNUE::load(const std::string filename)
     {
         parser.readTranspose(m_net->l1Weights[i], 1, L1Size, LQ);
         parser.read(m_net->l1Biases[i], 1, 1, LQ * FTQ);
+#if defined(USE_DOTPROD)
+        int64_t weightSum = 0;
+        bool canUseDotProd = true;
+        bool highBytesZero = true;
+        for(uint32_t j = 0; j < L1Size; j++)
+        {
+            const int16_t weight = m_net->l1Weights[i][j];
+            int16_t low = static_cast<int16_t>(weight & 0xff);
+            if(low >= 128) low -= 256;
+            const int16_t high = static_cast<int16_t>((weight - low) / 256);
+            m_net->l1WeightsLow[i][j] = static_cast<int8_t>(low);
+            if(high < -128 || high > 127)
+            {
+                canUseDotProd = false;
+                m_net->l1WeightsHigh[i][j] = 0;
+            }
+            else
+            {
+                m_net->l1WeightsHigh[i][j] = static_cast<int8_t>(high);
+            }
+            if(high != 0) highBytesZero = false;
+            weightSum += weight;
+        }
+        m_net->l1WeightCorrection[i] = 128LL * weightSum;
+        m_net->l1DotProdAvailable[i] = canUseDotProd;
+        m_net->l1DotProdHighBytesZero[i] = highBytesZero;
+#endif
     }
 
     DEBUG("Finished loading and quantizing: " << filename)

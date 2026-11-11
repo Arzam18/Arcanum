@@ -1,5 +1,7 @@
 #include <uci/uci.hpp>
+#if !defined(ANDROID_UCI_ONLY)
 #include <argsparser.hpp>
+#endif
 #include <eval.hpp>
 #include <bitboardlookups.hpp>
 #include <zobrist.hpp>
@@ -12,6 +14,12 @@ int main(int argc, char *argv[])
     Zobrist::init();
     Evaluator::nnue.load(Interface::UCI::optionNNUEPath.value);
 
+#if defined(ANDROID_UCI_ONLY)
+    (void)argc;
+    (void)argv;
+    Interface::UCI::loop();
+    return EXIT_SUCCESS;
+#else
     if(argc == 1)
     {
         Interface::UCI::loop();
@@ -24,4 +32,5 @@ int main(int argc, char *argv[])
     }
 
     return EXIT_SUCCESS;
+#endif
 }

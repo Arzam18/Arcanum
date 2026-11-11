@@ -29,6 +29,15 @@ namespace Arcanum
                 alignas(64) int16_t ftBiases[L1Size];
                 alignas(64) int16_t l1Weights[NumOutputBuckets][1 * L1Size];
                 alignas(64) int32_t l1Biases[NumOutputBuckets][1];
+#if defined(USE_DOTPROD)
+                // Exact signed-byte decomposition of the 16-bit output weights.
+                // The SDOT path uses these only when every high byte fits int8_t.
+                alignas(64) int8_t l1WeightsLow[NumOutputBuckets][L1Size];
+                alignas(64) int8_t l1WeightsHigh[NumOutputBuckets][L1Size];
+                int64_t l1WeightCorrection[NumOutputBuckets];
+                bool l1DotProdAvailable[NumOutputBuckets];
+                bool l1DotProdHighBytesZero[NumOutputBuckets];
+#endif
             };
 
             struct DeltaFeatures
@@ -69,6 +78,11 @@ namespace Arcanum
             void m_accAddSubSub(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
             void m_accAddAddSubSub(const Accumulator* acc, Accumulator* nextAcc, const DeltaFeatures& deltaFeatures, Color perspective);
             int32_t m_l1AffineTransform(const int16_t* in, const int16_t* weights, const int32_t* biases);
+#if defined(USE_DOTPROD)
+            int32_t m_l1AffineTransformDotProd(const int16_t* in, const int8_t* weightsLow,
+                                               const int8_t* weightsHigh, int64_t correction,
+                                               bool highBytesZero, const int32_t* biases);
+#endif
     };
 
 }
