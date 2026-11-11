@@ -6,7 +6,11 @@
 #include <thread>
 
 #ifndef ARCANUM_VERSION
-#define ARCANUM_VERSION dev_build
+#define ARCANUM_VERSION 2.8
+#endif
+
+#ifndef DEFAULT_NNUE
+#define DEFAULT_NNUE arcanum-net-v7.0.fnnue
 #endif
 
 namespace Arcanum
