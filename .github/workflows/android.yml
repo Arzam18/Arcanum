@@ -135,9 +135,23 @@ jobs:
       - name: Verify UCI version override
         shell: bash
         run: |
+          set -euo pipefail
           echo "Built UCI version: ${ARCANUM_VERSION}"
-          strings dist/bin/arcanum-neon | grep -F "id name Arcanum ${ARCANUM_VERSION}"
-          strings dist/bin/arcanum-dotprod | grep -F "id name Arcanum ${ARCANUM_VERSION}"
+          for binary in dist/bin/arcanum-neon dist/bin/arcanum-dotprod; do
+            # Clang/LLD may keep the prefix and version as separate strings,
+            # while other optimization/linker combinations merge them.
+            BIN_STRINGS=$(strings -a "$binary")
+            if grep -Fqx "id name Arcanum ${ARCANUM_VERSION}" <<< "$BIN_STRINGS"; then
+              :
+            elif grep -Fqx "id name Arcanum " <<< "$BIN_STRINGS" && \
+                 grep -Fq "$ARCANUM_VERSION" <<< "$BIN_STRINGS"; then
+              :
+            else
+              echo "ERROR: ${binary} does not contain the expected UCI name/version: Arcanum ${ARCANUM_VERSION}" >&2
+              exit 1
+            fi
+            echo "PASS: $binary contains UCI identity Arcanum ${ARCANUM_VERSION}."
+          done
 
       - name: Upload Android ARM64 binaries
         uses: actions/upload-artifact@v4
