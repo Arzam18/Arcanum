@@ -2,12 +2,6 @@ name: Build Arcanum for Android ARM64
 
 on:
   workflow_dispatch:
-    inputs:
-      uci_date:
-        description: 'Optional UCI version override (YYYYMMDD). Leave blank to use Arcanum 2.8.'
-        required: false
-        default: ''
-        type: string
   push:
     branches: ['*']
   pull_request:
@@ -34,25 +28,6 @@ jobs:
           ndk-version: r27c
           add-to-path: true
 
-      - name: Resolve UCI version
-        shell: bash
-        env:
-          UCI_DATE: ${{ inputs.uci_date }}
-        run: |
-          if [[ -z "${UCI_DATE//[[:space:]]/}" ]]; then
-            ENGINE_VERSION="2.8"
-            echo "Blank uci_date: preserving Arcanum's official engine version ${ENGINE_VERSION}."
-          else
-            if [[ ! "$UCI_DATE" =~ ^[0-9]{8}$ ]]; then
-              echo "uci_date must be blank or exactly 8 digits in YYYYMMDD format." >&2
-              exit 1
-            fi
-            # The date replaces the UCI version field; it is not appended to 2.8.
-            ENGINE_VERSION="$UCI_DATE"
-            echo "UCI version override: ${ENGINE_VERSION}"
-          fi
-          echo "ARCANUM_VERSION=${ENGINE_VERSION}" >> "$GITHUB_ENV"
-
       - name: Verify embedded network DotProd compatibility
         run: python3 scripts/verify_dotprod_network.py arcanum-net-v7.0.fnnue
 
@@ -69,7 +44,7 @@ jobs:
           "$CXX" $SOURCES \
             -O3 -DNDEBUG -std=c++17 -pthread \
             -march=armv8-a+simd -mtune=cortex-a76 \
-            -DANDROID_UCI_ONLY -DUSE_NEON -DARCANUM_VERSION=${ARCANUM_VERSION} \
+            -DANDROID_UCI_ONLY -DUSE_NEON \
             -DDEFAULT_NNUE=arcanum-net-v7.0.fnnue -DENABLE_INCBIN \
             -DLOG_FILE_NAME=Arcanum -DDISABLE_DEBUG \
             -Wno-return-type -Wno-unused-parameter \
@@ -99,7 +74,7 @@ jobs:
           "$CXX" $SOURCES \
             -O3 -DNDEBUG -std=c++17 -pthread \
             -march=armv8.2-a+dotprod -mtune=cortex-a76 \
-            -DANDROID_UCI_ONLY -DUSE_NEON -DUSE_DOTPROD -DARCANUM_VERSION=${ARCANUM_VERSION} \
+            -DANDROID_UCI_ONLY -DUSE_NEON -DUSE_DOTPROD \
             -DDEFAULT_NNUE=arcanum-net-v7.0.fnnue -DENABLE_INCBIN \
             -DLOG_FILE_NAME=Arcanum -DDISABLE_DEBUG \
             -Wno-return-type -Wno-unused-parameter \
@@ -131,27 +106,6 @@ jobs:
             echo "PASS: ${binary} includes an embedded network (${BIN_SIZE} bytes; network ${NET_SIZE} bytes)."
           done
           test "$(find dist/bin -maxdepth 1 -type f | wc -l)" -eq 2
-
-      - name: Verify UCI version override
-        shell: bash
-        run: |
-          set -euo pipefail
-          echo "Built UCI version: ${ARCANUM_VERSION}"
-          for binary in dist/bin/arcanum-neon dist/bin/arcanum-dotprod; do
-            # Clang/LLD may keep the prefix and version as separate strings,
-            # while other optimization/linker combinations merge them.
-            BIN_STRINGS=$(strings -a "$binary")
-            if grep -Fqx "id name Arcanum ${ARCANUM_VERSION}" <<< "$BIN_STRINGS"; then
-              :
-            elif grep -Fqx "id name Arcanum " <<< "$BIN_STRINGS" && \
-                 grep -Fq "$ARCANUM_VERSION" <<< "$BIN_STRINGS"; then
-              :
-            else
-              echo "ERROR: ${binary} does not contain the expected UCI name/version: Arcanum ${ARCANUM_VERSION}" >&2
-              exit 1
-            fi
-            echo "PASS: $binary contains UCI identity Arcanum ${ARCANUM_VERSION}."
-          done
 
       - name: Upload Android ARM64 binaries
         uses: actions/upload-artifact@v4
