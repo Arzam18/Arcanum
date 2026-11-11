@@ -1,8 +1,15 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 #include <cmath>
+#include <fstream>
+#include <type_traits>
 #include <utils.hpp>
+
+#ifndef DEFAULT_NNUE
+#define DEFAULT_NNUE arcanum-net-v7.0.fnnue
+#endif
 
 namespace Arcanum
 {
