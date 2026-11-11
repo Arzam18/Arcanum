@@ -27,7 +27,14 @@ void* Memory::alignedMalloc(const size_t bytes, const size_t alignment)
     #if defined(_WIN64)
     ptr = _aligned_malloc(allocSize, alignment);
     #elif defined(__linux__)
-    ptr = aligned_alloc(alignment, allocSize);
+    // Android's NDK does not expose aligned_alloc at the API level used by
+    // this build. posix_memalign is available on Android from API 16 and
+    // provides the same alignment guarantee without the aligned_alloc size
+    // multiple restriction.
+    if(posix_memalign(&ptr, alignment, allocSize) != 0)
+    {
+        ptr = nullptr;
+    }
     #else
         #error Missing implementation of aligned malloc
     // Create an aligned pointer from the potential unaligned malloc
